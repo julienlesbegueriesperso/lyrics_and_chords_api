@@ -1,5 +1,8 @@
 import { lazy, Suspense, useRef, useState } from 'react';
 import { useSongs } from './hooks/useSongs';
+import { useSession } from './hooks/useSession';
+import { supabase } from './lib/supabase';
+import { Login } from './components/Login';
 import { transposeContent, respellContent } from './lib/chords';
 import { countChords } from './lib/parse';
 import { newSolo, respellSolo, transposeSolo } from './lib/solo';
@@ -19,6 +22,7 @@ const SoloEditor = lazy(() => import('./components/SoloEditor').then((m) => ({ d
 const PrintDoc = lazy(() => import('./components/PrintDoc').then((m) => ({ default: m.PrintDoc })));
 
 export default function App() {
+  const session = useSession();
   const { songs, active, setActiveId, createSong, deleteSong, updateSong, importSongs } = useSongs();
   const [mode, setMode] = useState<'edit' | 'view'>('edit');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -102,6 +106,18 @@ export default function App() {
     }
   };
 
+  if (!supabase || session === null) return <Login />;
+  if (session === undefined) {
+    return (
+      <div className="auth-wrap">
+        <div className="auth-card">
+          <h1>Paroles &amp; accords</h1>
+          <p>Chargement…</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -180,6 +196,19 @@ export default function App() {
             </button>
             <button type="button" className="btn" onClick={exportAllJson} disabled={songs.length === 0}>
               Export backup
+            </button>
+          </div>
+          <div className="user-row">
+            <span className="user-email" title={session.user.email ?? ''}>
+              {session.user.email}
+            </span>
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => supabase?.auth.signOut()}
+              title="Se déconnecter"
+            >
+              Déconnexion
             </button>
           </div>
           <input

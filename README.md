@@ -1,35 +1,46 @@
-# React + TypeScript + Vite
+# Paroles & accords
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Webapp React (Vite + pnpm) : paroles avec accords au-dessus du texte (`[Am]` inline),
+éditeur de solos en notation (VexFlow, clé de sol), transposition globale,
+export/import `.md` + backup `.json`, impression / PDF, authentification Supabase.
 
-Currently, two official plugins are available:
+## Dev local
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
-
-Note: This will impact Vite dev & build performances.
-You can also try [the experimental native React Compiler support in plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md#rust-react-compiler) by using `compiler: true` in the plugin options instead of using the Babel plugin.
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```sh
+pnpm install
+cp .env.example .env   # renseigne VITE_SUPABASE_URL + VITE_SUPABASE_PUBLISHABLE_KEY
+pnpm dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Sans `.env`, l'app affiche l'aide de configuration au lieu du formulaire de connexion.
+
+## Authentification (Supabase Auth, email + mot de passe)
+
+1. Crée un projet sur https://supabase.com → **Project Settings → Data API** : récupère
+   `Project URL` et la clé publishable `sb_publishable_...`.
+2. **Authentication → Users → Add user** : crée ton compte (email + mot de passe).
+   L'inscription publique depuis l'app est désactivée par défaut
+   (`VITE_ALLOW_SIGNUP=true` pour l'activer).
+3. Renseigne `.env` (local) et les variables d'environnement sur Vercel (prod).
+
+Notes de sécurité :
+- Les mots de passe sont hashés côté Supabase, jamais dans le bundle ; la clé
+  publishable est publique par conception. HTTPS fourni par Vercel.
+- L'authentification verrouille l'accès à l'outil ; les chansons restent
+  stockées dans le `localStorage` du navigateur (par appareil, non chiffrées).
+
+## Déploiement Vercel
+
+1. Push le repo sur GitHub, importe-le dans Vercel (preset Vite détecté : `pnpm build`, `dist`).
+2. **Settings → Environment Variables** : `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+   (+ `VITE_ALLOW_SIGNUP` si besoin), puis **Redeploy**.
+3. `vercel.json` inclus : fallback SPA + en-têtes de sécurité de base.
+
+## Format `.md`
+
+Frontmatter `title` / `artist`, corps Markdown + accords `[C]`, solos en blocs
+````md
+```solo "Intro" key=G time=4/4 mpl=4
+q:G4 q:A4 | h:B4 q:R
+```
+````
