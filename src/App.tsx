@@ -16,12 +16,14 @@ import { TransposeBar } from './components/TransposeBar';
 import './App.css';
 
 const SoloEditor = lazy(() => import('./components/SoloEditor').then((m) => ({ default: m.SoloEditor })));
+const PrintDoc = lazy(() => import('./components/PrintDoc').then((m) => ({ default: m.PrintDoc })));
 
 export default function App() {
   const { songs, active, setActiveId, createSong, deleteSong, updateSong, importSongs } = useSongs();
   const [mode, setMode] = useState<'edit' | 'view'>('edit');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState('');
+  const [printReady, setPrintReady] = useState(false);
   const mdInputRef = useRef<HTMLInputElement>(null);
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
@@ -255,6 +257,20 @@ export default function App() {
                 Aperçu
               </button>
               <span className="chord-count">{countChords(active.content)} accords</span>
+              <button
+                type="button"
+                className="btn"
+                title="Imprimer ou exporter en PDF (via la boîte de dialogue)"
+                onClick={() => {
+                  if (!printReady) {
+                    alert('Partition en cours de chargement, réessaie dans un instant.');
+                    return;
+                  }
+                  window.print();
+                }}
+              >
+                🖨 Imprimer / PDF
+              </button>
             </div>
 
             {mode === 'edit' ? (
@@ -317,6 +333,9 @@ export default function App() {
                 </p>
               </details>
             </footer>
+            <Suspense fallback={null}>
+              <PrintDoc song={active} onReady={() => setPrintReady(true)} />
+            </Suspense>
           </>
         )}
       </main>

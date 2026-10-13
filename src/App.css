@@ -671,3 +671,100 @@
   opacity: 0.4;
   cursor: default;
 }
+
+/* ---------- Document d'impression / PDF ---------- */
+.print-doc {
+  display: none;
+}
+
+.print-title {
+  font-size: 28px;
+  margin: 0 0 2px;
+  color: #000;
+}
+
+.print-artist {
+  color: #444;
+  font-size: 15px;
+  margin: 0 0 18px;
+}
+
+.print-solo {
+  margin-top: 26px;
+}
+
+.print-solo h2 {
+  font-size: 16px;
+  color: #000;
+}
+
+.print-solo-meta {
+  font-weight: 400;
+  font-size: 12px;
+  color: #555;
+}
+
+@media print {
+  @page {
+    margin: 14mm;
+  }
+
+  #root {
+    border: none;
+    width: auto;
+    max-width: none;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  .app {
+    display: block;
+  }
+
+  .sidebar {
+    display: none !important;
+  }
+
+  .main {
+    max-width: none;
+    padding: 0;
+  }
+
+  .main > *:not(.print-doc) {
+    display: none !important;
+  }
+
+  .print-doc {
+    display: block !important;
+    color: #000;
+  }
+
+  .print-doc svg {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .print-solo,
+  .song-line,
+  .song-heading {
+    break-inside: avoid;
+  }
+
+  .print-doc,
+  .print-doc .song-sheet,
+  .print-doc .chord,
+  .print-doc .lyric {
+    color: #000;
+  }
+
+  .print-doc .chord {
+    color: #7a1cc9;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

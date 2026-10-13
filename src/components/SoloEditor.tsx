@@ -1,21 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  Accidental,
-  Annotation,
-  Barline,
-  Beam,
-  Dot,
-  Formatter,
-  GhostNote,
-  Renderer,
-  Stave,
-  StaveNote,
-  Voice,
-} from 'vexflow';
 import { isChordToken } from '../lib/chords';
+import { F5_INDEX, SCORE, renderSystem, type ScoreGeom } from '../lib/renderScore';
 import {
   canFit,
-  defaultAccidental,
   measureBeats,
   newMeasure,
   pitchAtStep,
@@ -32,35 +19,18 @@ import {
   type TimeSig,
 } from '../lib/solo';
 
-const MEASURE_W = 230;
-const SPACING = 12; // px entre lignes de portée
-const STAVE_Y = 64; // y de la 5e ligne (F5), laisse la place aux accords
-const SYSTEM_H = 190;
 const DUR_ORDER: NoteDur[] = ['w', 'h', 'q', '8', '16'];
 const DUR_SHORT: Record<NoteDur, string> = { w: 'Ronde', h: 'Blanche', q: 'Noire', '8': 'Croche', '16': 'Double' };
-const F5_INDEX = 10; // F5 dans STEPS
 
 interface Selection {
   measureId: string;
   noteId: string;
 }
 
-interface Geom {
-  measureX: number[];
-  measureW: number[];
-  noteX: Array<Array<{ id: string; x: number }>>;
-}
-
 interface Props {
   solo: Solo;
   onChange: (s: Solo) => void;
   onDelete: () => void;
-}
-
-function vexKey(pitch: string): string {
-  const s = splitPitch(pitch);
-  if (!s) return 'b/4';
-  return `${s.letter.toLowerCase()}/${s.octave}`;
 }
 
 export function SoloEditor({ solo, onChange, onDelete }: Props) {
@@ -70,7 +40,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
   const [warn, setWarn] = useState<string | null>(null);
   const [confirmDel, setConfirmDel] = useState(false);
   const svgRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const geomRef = useRef<Geom[]>([]);
+  const geomRef = useRef<ScoreGeom[]>([]);
   const dragRef = useRef<Selection | null>(null);
   // Historique annuler/refaire (10 actions), local au solo
   const pastRef = useRef<Solo[]>([]);
@@ -137,86 +107,20 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
     geomRef.current = systems.map((measures, si) => {
       const host = svgRefs.current[si];
       if (!host) return { measureX: [], measureW: [], noteX: [] };
-      host.innerHTML = '';
-      const widths = measures.map((_, i) => MEASURE_W + (i === 0 ? (si === 0 ? 110 : 70) : 0));
-      const totalW = widths.reduce((a, b) => a + b, 0) + 20;
-      const renderer = new Renderer(host, Renderer.Backends.SVG);
-      renderer.resize(totalW, SYSTEM_H);
-      const ctx = renderer.getContext();
-      const geom: Geom = { measureX: [], measureW: [], noteX: [] };
-      let x = 10;
-      measures.forEach((m, i) => {
-        const w = widths[i];
-        const stave = new Stave(x, STAVE_Y, w, { spacingBetweenLinesPx: SPACING });
-        if (i === 0) {
-          stave.addClef('treble');
-          stave.addKeySignature(solo.keySig);
-          if (si === 0) stave.addTimeSignature(solo.timeSig);
-        }
-        if (si === systems.length - 1 && i === measures.length - 1) {
-          stave.setEndBarType(Barline.type.END);
-        }
-        stave.setContext(ctx).draw();
-
-        const snList: StaveNote[] = m.notes.map((n) => {
-          const isRest = n.pitch === 'R';
-          const sn = new StaveNote({
-            keys: [isRest ? 'b/4' : vexKey(n.pitch)],
-            duration: isRest ? `${n.dur}r` : n.dur,
-            clef: 'treble',
-            autoStem: true,
-          });
-          if (!isRest) {
-            const s = splitPitch(n.pitch);
-            const expected = s ? defaultAccidental(s.letter, solo.keySig) : '';
-            if (s && s.acc && s.acc !== expected) sn.addModifier(new Accidental(s.acc), 0);
-          }
-          if (n.chord) {
-            const ann = new Annotation(n.chord);
-            ann.setVerticalJustification(Annotation.VerticalJustify.TOP);
-            ann.setFont('Arial', 11, 'bold');
-            sn.addModifier(ann, 0);
-          }
-          if (n.dotted) Dot.buildAndAttach([sn], { all: true });
-          if (selected?.noteId === n.id) sn.setStyle({ fillStyle: '#aa3bff', strokeStyle: '#aa3bff' });
-          return sn;
-        });
-
-        // Liaisons créées AVANT format/draw : Beam(autoStem) fige la direction
-        // des hampes, voice.draw() les dessine ensuite de façon cohérente.
-        const beams: Beam[] = [];
-        let run: StaveNote[] = [];
-        const flush = () => {
-          if (run.length >= 2) beams.push(new Beam(run, true));
-          run = [];
-        };
-        m.notes.forEach((n, ni) => {
-          if ((n.dur === '8' || n.dur === '16') && n.pitch !== 'R') run.push(snList[ni]);
-          else flush();
-        });
-        flush();
-
-        const voice = new Voice({ numBeats: capacity, beatValue: 4 });
-        voice.setStrict(false);
-        if (snList.length === 0) voice.addTickables([new GhostNote({ duration: 'w' })]);
-        else voice.addTickables(snList);
-        new Formatter().joinVoices([voice]).formatToStave([voice], stave);
-        voice.draw(ctx, stave);
-        beams.forEach((b) => b.setContext(ctx).draw());
-
-        geom.measureX.push(x);
-        geom.measureW.push(w);
-        geom.noteX.push(m.notes.map((n, ni) => ({ id: n.id, x: snList[ni].getAbsoluteX() })));
-        x += w;
+      return renderSystem(host, {
+        solo,
+        measures,
+        systemIndex: si,
+        totalSystems: systems.length,
+        selectedId: selected?.noteId ?? null,
       });
-      return geom;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [solo, selected]);
 
   // ---------- interactions ----------
   const posToStep = (y: number): number => {
-    const idx = Math.round(F5_INDEX - (y - STAVE_Y) / (SPACING / 2));
+    const idx = Math.round(F5_INDEX - (y - SCORE.staveY) / (SCORE.spacing / 2));
     return Math.max(0, Math.min(STEPS.length - 1, idx));
   };
 
