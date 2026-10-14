@@ -9,6 +9,7 @@ import {
   Renderer,
   Stave,
   StaveNote,
+  StaveTie,
   Voice,
 } from 'vexflow';
 import { defaultAccidental, splitPitch, TIME_CAPACITY, type Solo, type SoloMeasure } from './solo';
@@ -38,10 +39,11 @@ export function renderSystem(
     systemIndex: number;
     totalSystems: number;
     measureW?: number;
-    selectedId?: string | null;
+    selectedId?: string | string[] | null;
   },
 ): ScoreGeom {
   const { solo, measures, systemIndex: si, totalSystems, measureW = SCORE.measureW, selectedId = null } = args;
+  const selected = new Set(Array.isArray(selectedId) ? selectedId : selectedId ? [selectedId] : []);
   host.innerHTML = '';
   const capacity = TIME_CAPACITY[solo.timeSig];
   const widths = measures.map((_, i) => measureW + (i === 0 ? (si === 0 ? 110 : 70) : 0));
@@ -50,6 +52,11 @@ export function renderSystem(
   renderer.resize(totalW, SCORE.height);
   const ctx = renderer.getContext();
   const geom: ScoreGeom = { measureX: [], measureW: [], noteX: [] };
+  // Ordre global des notes (toutes mesures) pour les liaisons, y compris entre mesures.
+  const flat: Array<{ mId: string; nId: string; pitch: string }> = [];
+  solo.measures.forEach((mm) => mm.notes.forEach((n) => flat.push({ mId: mm.id, nId: n.id, pitch: n.pitch })));
+  const inSystem = new Set(measures.flatMap((m) => m.notes.map((n) => n.id)));
+  const snById = new Map<string, StaveNote>();
   let x = 10;
   measures.forEach((m, i) => {
     const w = widths[i];
@@ -84,7 +91,8 @@ export function renderSystem(
         sn.addModifier(ann, 0);
       }
       if (n.dotted) Dot.buildAndAttach([sn], { all: true });
-      if (selectedId === n.id) sn.setStyle({ fillStyle: '#aa3bff', strokeStyle: '#aa3bff' });
+      if (selected.has(n.id)) sn.setStyle({ fillStyle: '#aa3bff', strokeStyle: '#aa3bff' });
+      snById.set(n.id, sn);
       return sn;
     });
 
@@ -115,5 +123,43 @@ export function renderSystem(
     geom.noteX.push(m.notes.map((n, ni) => ({ id: n.id, x: snList[ni].getAbsoluteX() })));
     x += w;
   });
+
+  // Liaisons de prolongation (tie) : entre mesures du système + demi-liaisons
+  // aux bornes du système (liaison à cheval sur deux lignes).
+  const canTie = (a: string, b: string) => a !== 'R' && a === b;
+  const drawTie = (first: StaveNote | null, last: StaveNote | null) => {
+    try {
+      new StaveTie({ firstNote: first, lastNote: last, firstIndexes: [0], lastIndexes: [0] })
+        .setContext(ctx)
+        .draw();
+    } catch {
+      /* note hors contexte : ignore */
+    }
+  };
+  measures.forEach((m) => {
+    m.notes.forEach((n) => {
+      if (!n.tie) return;
+      const i = flat.findIndex((f) => f.nId === n.id);
+      const next = i >= 0 ? flat[i + 1] : undefined;
+      if (!next || !canTie(n.pitch, next.pitch)) return;
+      const first = snById.get(n.id) ?? null;
+      const last = snById.get(next.nId) ?? null;
+      if (first && last) drawTie(first, last);
+      else if (first && !inSystem.has(next.nId)) drawTie(first, null); // sort du système
+    });
+  });
+  // Demi-liaison entrante : 1re note du système cible d'une liaison du système précédent.
+  const firstInSystem = flat.find((f) => inSystem.has(f.nId));
+  if (firstInSystem) {
+    const i = flat.findIndex((f) => f.nId === firstInSystem.nId);
+    const prev = i > 0 ? flat[i - 1] : undefined;
+    const prevTied = prev
+      ? solo.measures.some((mm) => mm.notes.some((n) => n.id === prev.nId && n.tie))
+      : false;
+    if (prev && prevTied && canTie(prev.pitch, firstInSystem.pitch) && !inSystem.has(prev.nId)) {
+      const last = snById.get(firstInSystem.nId) ?? null;
+      if (last) drawTie(null, last);
+    }
+  }
   return geom;
 }

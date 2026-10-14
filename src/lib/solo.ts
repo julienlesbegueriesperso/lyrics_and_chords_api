@@ -16,13 +16,15 @@ export const DUR_LABELS: Record<NoteDur, string> = {
 export const KEY_SIGS = ['C', 'G', 'D', 'A', 'E', 'F', 'Bb', 'Eb'] as const;
 export type KeySig = (typeof KEY_SIGS)[number];
 
-/** pitch "C5", "F#4", "Bb3" ou "R" pour un silence. chord : accord optionnel au-dessus. */
+/** pitch "C5", "F#4", "Bb3" ou "R" pour un silence. chord : accord optionnel au-dessus.
+ *  tie : liaison de prolongation vers la note suivante (même hauteur). */
 export interface SoloNote {
   id: string;
   pitch: string;
   dur: NoteDur;
   dotted?: boolean;
   chord?: string;
+  tie?: boolean;
 }
 
 export interface SoloMeasure {
@@ -189,7 +191,7 @@ export function serializeSolo(solo: Solo): string {
       .map((n) => {
         const chord = n.chord ? `[${n.chord}]` : '';
         const body = n.pitch === 'R' ? `${n.dur}${n.dotted ? '.' : ''}:R` : `${n.dur}${n.dotted ? '.' : ''}:${n.pitch}`;
-        return `${chord}${body}`;
+        return `${chord}${body}${n.tie ? '~' : ''}`;
       })
       .join(' '),
   );
@@ -197,7 +199,7 @@ export function serializeSolo(solo: Solo): string {
   return `${head}\n${lines.join(' | ')}\n\`\`\``;
 }
 
-const TOKEN_RE = /^(?:\[([^\]]+)\])?([whq]|16|8)(\.?):([A-G][#b]?-?\d|R)$/;
+const TOKEN_RE = /^(?:\[([^\]]+)\])?([whq]|16|8)(\.?):([A-G][#b]?-?\d|R)(~?)$/;
 
 export function parseSoloBlock(title: string, keySig: string, timeSig: string, mpl: string, body: string): Solo {
   if (!KEY_SIGS.includes(keySig as KeySig)) throw new Error(`Armature inconnue : ${keySig}`);
@@ -215,11 +217,18 @@ export function parseSoloBlock(title: string, keySig: string, timeSig: string, m
     const notes: SoloNote[] = tokens.map((tok) => {
       const m = tok.match(TOKEN_RE);
       if (!m) throw new Error(`Mesure ${mi + 1} : note invalide « ${tok} »`);
-      const [, chord, dur, dot, pitch] = m;
+      const [, chord, dur, dot, pitch, tie] = m;
       if (chord !== undefined && !isChordToken(chord)) throw new Error(`Mesure ${mi + 1} : accord invalide « ${chord} »`);
       used += DUR_BEATS[dur as NoteDur] * (dot === '.' ? 1.5 : 1);
       if (used > capacity + 1e-9) throw new Error(`Mesure ${mi + 1} : dépasse ${time}`);
-      return { id: uid(), pitch, dur: dur as NoteDur, ...(dot === '.' ? { dotted: true } : {}), ...(chord ? { chord } : {}) };
+      return {
+        id: uid(),
+        pitch,
+        dur: dur as NoteDur,
+        ...(dot === '.' ? { dotted: true } : {}),
+        ...(chord ? { chord } : {}),
+        ...(tie === '~' ? { tie: true as const } : {}),
+      };
     });
     return { id: uid(), notes };
   });

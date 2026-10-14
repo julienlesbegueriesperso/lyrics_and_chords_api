@@ -34,7 +34,7 @@ interface Props {
 }
 
 export function SoloEditor({ solo, onChange, onDelete }: Props) {
-  const [selected, setSelected] = useState<Selection | null>(null);
+  const [selected, setSelected] = useState<Selection[]>([]);
   const [addDur, setAddDur] = useState<NoteDur>('q');
   const [addMode, setAddMode] = useState<'note' | 'rest'>('note');
   const [warn, setWarn] = useState<string | null>(null);
@@ -87,9 +87,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
     futureRef.current.push(soloRef.current);
     setHistTick((t) => t + 1);
     setSelected((sel) =>
-      sel && prev.measures.some((m) => m.id === sel.measureId && m.notes.some((n) => n.id === sel.noteId))
-        ? sel
-        : null,
+      sel.filter((s) => prev.measures.some((m) => m.id === s.measureId && m.notes.some((n) => n.id === s.noteId))),
     );
     onChange(prev);
   };
@@ -112,7 +110,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
         measures,
         systemIndex: si,
         totalSystems: systems.length,
-        selectedId: selected?.noteId ?? null,
+        selectedId: selected.map((s) => s.noteId),
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -139,7 +137,15 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
     const measure = solo.measures[globalMi];
     const hit = geom.noteX[localMi].find((p) => Math.abs(p.x - px) < 22);
     if (hit) {
-      setSelected({ measureId: measure.id, noteId: hit.id });
+      const sel = { measureId: measure.id, noteId: hit.id };
+      // Ctrl/Cmd/Shift + clic = multi-sélection (pour lier plusieurs notes)
+      if (e.ctrlKey || e.metaKey || e.shiftKey) {
+        setSelected((prev) =>
+          prev.some((s) => s.noteId === hit.id) ? prev.filter((s) => s.noteId !== hit.id) : [...prev, sel],
+        );
+      } else {
+        setSelected([sel]);
+      }
       dragRef.current = { measureId: measure.id, noteId: hit.id };
       dragStartRef.current = soloRef.current;
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -162,7 +168,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
         return { ...mm, notes };
       }),
     );
-    setSelected({ measureId: measure.id, noteId: note.id });
+    setSelected([{ measureId: measure.id, noteId: note.id }]);
   };
 
   const setNoteStep = (measureId: string, noteId: string, stepIdx: number, commit = true) => {
@@ -224,10 +230,10 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
     const notes = [...selMeasure.notes];
     const [n] = notes.splice(i, 1);
     notes.splice(j, 0, n);
-    patchMeasures((ms) => ms.map((mm) => (mm.id === selMeasure.id ? { ...mm, notes } : mm)));
+    patchMeasures((ms) => clearDanglingTies(ms.map((mm) => (mm.id === selMeasure.id ? { ...mm, notes } : mm))));
   };
 
-  // Clavier : note sélectionnée = ↑↓ hauteur, ←→ durée, . pointée, ⌫ supprimer, Échap fermer.
+  // Clavier : note sélectionnée = ↑↓ hauteur, ←→ durée, . pointée, L lier, ⌫ supprimer, Échap fermer.
   // Ctrl/Cmd+Z / Ctrl+Shift+Z / Ctrl+Y = annuler / refaire (partout sauf champs de saisie).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -245,7 +251,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
         redo();
         return;
       }
-      if (!selected || inField) return;
+      if (selected.length === 0 || inField) return;
       switch (e.key) {
         case 'ArrowUp':
           e.preventDefault();
@@ -267,13 +273,18 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
           e.preventDefault();
           toggleSelDot();
           break;
+        case 'l':
+        case 'L':
+          e.preventDefault();
+          tiePrimary();
+          break;
         case 'Delete':
         case 'Backspace':
           e.preventDefault();
           deleteSelNote();
           break;
         case 'Escape':
-          setSelected(null);
+          setSelected([]);
           break;
       }
     };
@@ -300,11 +311,131 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
   };
 
   // ---------- panneau note sélectionnée ----------
-  const selMeasure = solo.measures.find((m) => m.id === selected?.measureId);
-  const selNote = selMeasure && selected ? findNote(selMeasure, selected.noteId) : undefined;
+  // Sélection multiple : la « primaire » (panneau) est la dernière sélectionnée.
+  const primary = selected.length > 0 ? selected[selected.length - 1] : undefined;
+  const selMeasure = solo.measures.find((m) => m.id === primary?.measureId);
+  const selNote = selMeasure && primary ? findNote(selMeasure, primary.noteId) : undefined;
+
+  /** Ordre global des notes (toutes mesures) : indispensable pour lier entre 2 mesures. */
+  const flatNotes = () => soloRef.current.measures.flatMap((m) => m.notes.map((n) => ({ measureId: m.id, note: n })));
+  const nextOf = (noteId: string) => {
+    const flat = flatNotes();
+    const i = flat.findIndex((f) => f.note.id === noteId);
+    if (i < 0) return undefined;
+    return { curr: flat[i], next: flat[i + 1] as (typeof flat)[number] | undefined };
+  };
+  /** Enlève les liaisons devenues invalides (successeur absent, silence ou hauteur différente). */
+  const clearDanglingTies = (measures: SoloMeasure[]): SoloMeasure[] => {
+    const flat = measures.flatMap((m) => m.notes);
+    const ok = new Set(flat.filter((n, i) => n.tie && flat[i + 1] && flat[i + 1].pitch !== 'R' && flat[i + 1].pitch === n.pitch).map((n) => n.id));
+    let changed = false;
+    const out = measures.map((m) => ({
+      ...m,
+      notes: m.notes.map((n) => {
+        if (n.tie && !ok.has(n.id)) {
+          changed = true;
+          const { tie: _drop, ...rest } = n;
+          return rest;
+        }
+        return n;
+      }),
+    }));
+    return changed ? out : measures;
+  };
+
+  /** Lie la note primaire à la note qui la suit (souvent dans la mesure suivante). */
+  const tiePrimary = () => {
+    if (!selMeasure || !selNote) return;
+    const found = nextOf(selNote.id);
+    if (!found?.next) {
+      flash('Aucune note suivante à lier');
+      return;
+    }
+    if (selNote.pitch === 'R' || found.next.note.pitch === 'R') {
+      flash('On ne peut pas lier un silence');
+      return;
+    }
+    if (found.next.note.pitch !== selNote.pitch) {
+      flash(`Liaison impossible : ${selNote.pitch} → ${found.next.note.pitch} (même hauteur requise)`);
+      return;
+    }
+    patchMeasures((ms) =>
+      ms.map((mm) =>
+        mm.id === selMeasure.id
+          ? { ...mm, notes: mm.notes.map((n) => (n.id === selNote.id ? { ...n, tie: true as const } : n)) }
+          : mm,
+      ),
+    );
+  };
+
+  /** Lie les notes sélectionnées entre elles (chaîne, dans l'ordre de la partition). */
+  const tieSelection = () => {
+    if (selected.length < 2) return;
+    const flat = flatNotes();
+    const pos = new Map(flat.map((f, i) => [f.note.id, i]));
+    const ordered = [...selected].sort((a, b) => (pos.get(a.noteId) ?? 0) - (pos.get(b.noteId) ?? 0));
+    for (let k = 0; k < ordered.length - 1; k++) {
+      const a = flat[pos.get(ordered[k].noteId) ?? -1];
+      const b = flat[pos.get(ordered[k + 1].noteId) ?? -1];
+      if (!a || !b) continue;
+      if (a.note.pitch === 'R' || b.note.pitch === 'R') {
+        flash('On ne peut pas lier un silence');
+        return;
+      }
+      if (a.note.pitch !== b.note.pitch) {
+        flash(`Liaison impossible : ${a.note.pitch} → ${b.note.pitch} (même hauteur requise)`);
+        return;
+      }
+      if ((pos.get(ordered[k + 1].noteId) ?? 0) - (pos.get(ordered[k].noteId) ?? 0) !== 1) {
+        flash('Les notes liées doivent se suivre (sans note entre elles)');
+        return;
+      }
+    }
+    const ids = new Set(ordered.slice(0, -1).map((s) => s.noteId));
+    patchMeasures((ms) =>
+      ms.map((mm) => ({
+        ...mm,
+        notes: mm.notes.map((n) => (ids.has(n.id) ? { ...n, tie: true as const } : n)),
+      })),
+    );
+  };
+
+  /** Délie les notes sélectionnées (liaisons sortantes + celles qui pointent vers elles). */
+  const untieSelection = () => {
+    if (selected.length === 0) return;
+    const ids = new Set(selected.map((s) => s.noteId));
+    const flat = flatNotes();
+    const incoming = new Set<string>();
+    flat.forEach((f, i) => {
+      if (f.note.tie && flat[i + 1] && ids.has(flat[i + 1].note.id)) incoming.add(f.note.id);
+    });
+    patchMeasures((ms) =>
+      ms.map((mm) => ({
+        ...mm,
+        notes: mm.notes.map((n) => {
+          if (ids.has(n.id) && n.tie) {
+            const { tie: _drop, ...rest } = n;
+            return rest;
+          }
+          if (incoming.has(n.id)) {
+            const { tie: _drop, ...rest } = n;
+            return rest;
+          }
+          return n;
+        }),
+      })),
+    );
+  };
+  const selIds = new Set(selected.map((s) => s.noteId));
+  const selHasTie = (() => {
+    const flat = solo.measures.flatMap((m) => m.notes);
+    return flat.some(
+      (n, i) => (selIds.has(n.id) && n.tie) || (n.tie && flat[i + 1] !== undefined && selIds.has(flat[i + 1].id)),
+    );
+  })();
 
   const setSelDur = (dur: NoteDur) => {
-    if (!selMeasure || !selNote || !selected) return;
+    if (!selMeasure || !selNote || selected.length === 0) return;
     if (!canFit(selMeasure, solo.timeSig, dur, selNote.id)) {
       flash(`Mesure pleine (${solo.timeSig})`);
       return;
@@ -319,11 +450,12 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
   };
 
   const deleteSelNote = () => {
-    if (!selMeasure || !selNote) return;
+    if (selected.length === 0) return;
+    const ids = new Set(selected.map((s) => s.noteId));
     patchMeasures((ms) =>
-      ms.map((mm) => (mm.id === selMeasure.id ? { ...mm, notes: mm.notes.filter((n) => n.id !== selNote.id) } : mm)),
+      clearDanglingTies(ms.map((mm) => ({ ...mm, notes: mm.notes.filter((n) => !ids.has(n.id)) }))),
     );
-    setSelected(null);
+    setSelected([]);
   };
 
   const setSelChord = (chord: string) => {
@@ -454,7 +586,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
             {DUR_SHORT[d]}
           </button>
         ))}
-        <span className="solo-hint">Clic = insérer à l'endroit cliqué · Glisser = hauteur · Clavier : ↑↓ hauteur · ←→ durée · . pointée · ⌫ supprimer · Ctrl+Z annuler</span>
+        <span className="solo-hint">Clic = insérer à l'endroit cliqué · Glisser = hauteur · Ctrl/Cmd+clic = multi-sélection · Clavier : ↑↓ hauteur · ←→ durée · . pointée · L lier · ⌫ supprimer · Ctrl+Z annuler</span>
       </div>
       {warn && <div className="solo-warn">{warn}</div>}
 
@@ -487,8 +619,8 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
                       title={`Supprimer la mesure ${base + i + 1}`}
                       disabled={solo.measures.length <= 1}
                       onClick={() => {
-                        patchMeasures((ms) => ms.filter((mm) => mm.id !== m.id));
-                        if (selected?.measureId === m.id) setSelected(null);
+                        patchMeasures((ms) => clearDanglingTies(ms.filter((mm) => mm.id !== m.id)));
+                        setSelected((prev) => prev.filter((s) => s.measureId !== m.id));
                       }}
                     >
                       ×
@@ -501,9 +633,42 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
         );
       })}
 
-      {selNote && selMeasure && (
+      {selected.length > 1 && (
+        <div className="note-panel">
+          <strong>{selected.length} notes sélectionnées</strong>
+          <span className="sep" />
+          <button type="button" className="btn" onClick={tieSelection} title="Lier les notes sélectionnées entre elles (même hauteur, sans note entre elles)">
+            ⌒ Lier la sélection
+          </button>
+          <button type="button" className="btn ghost" onClick={untieSelection} disabled={!selHasTie} title="Enlever les liaisons des notes sélectionnées">
+            Délier
+          </button>
+          <button type="button" className="btn ghost" onClick={deleteSelNote}>
+            Supprimer ({selected.length})
+          </button>
+          <button type="button" className="btn ghost" onClick={() => setSelected([])}>
+            Fermer
+          </button>
+        </div>
+      )}
+
+      {selected.length === 1 && selNote && selMeasure && (
         <div className="note-panel">
           <strong>{selNote.pitch === 'R' ? 'Silence' : `Note ${selNote.pitch}`}</strong>
+          <span className="sep" />
+          <button
+            type="button"
+            className={selNote.tie ? 'active' : ''}
+            onClick={tiePrimary}
+            title="Lier à la note suivante (touche L) — même hauteur, y compris vers la mesure suivante"
+          >
+            ⌒ Lier
+          </button>
+          {selHasTie && (
+            <button type="button" className="btn ghost" onClick={untieSelection} title="Enlever la liaison">
+              Délier
+            </button>
+          )}
           <span className="sep" />
           {DUR_ORDER.map((d) => (
             <button
@@ -544,7 +709,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
           <button type="button" className="btn ghost" onClick={deleteSelNote}>
             Supprimer la note
           </button>
-          <button type="button" className="btn ghost" onClick={() => setSelected(null)}>
+          <button type="button" className="btn ghost" onClick={() => setSelected([])}>
             Fermer
           </button>
         </div>
