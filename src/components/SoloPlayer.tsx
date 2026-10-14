@@ -19,10 +19,12 @@ interface Props {
   /** Libellé du point de départ (ex. "M3 n2"), ou null. */
   startLabel: string | null;
   onPlayingId: (id: string | null) => void;
+  /** Appelé par ⏮ : le retour au début désélectionne (sinon ▶ repartirait de la note). */
+  onClearSelection: () => void;
 }
 
 /** Petit lecteur MIDI (Web Audio, sans dépendance) pour un solo. */
-export function SoloPlayer({ solo, startNoteId, startLabel, onPlayingId }: Props) {
+export function SoloPlayer({ solo, startNoteId, startLabel, onPlayingId, onClearSelection }: Props) {
   const [playing, setPlaying] = useState(false);
   const [posBeats, setPosBeats] = useState(0);
   const [bpm, setBpm] = useState(100);
@@ -187,6 +189,7 @@ export function SoloPlayer({ solo, startNoteId, startLabel, onPlayingId }: Props
   const rewind = () => {
     hardStop();
     setPosBeats(0);
+    onClearSelection();
   };
 
   const toggle = () => {

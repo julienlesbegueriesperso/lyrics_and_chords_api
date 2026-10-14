@@ -507,7 +507,13 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
         />
         <label className="solo-opt">
           Armature
-          <select value={solo.keySig} onChange={(e) => update({ ...soloRef.current, keySig: e.target.value })}>
+          <select
+            value={solo.keySig}
+            onChange={(e) => {
+              update({ ...soloRef.current, keySig: e.target.value });
+              e.currentTarget.blur(); // rend le focus : les flèches ↑↓ repilotent la note, pas la liste
+            }}
+          >
             {KEY_SIGS.map((k) => (
               <option key={k} value={k}>
                 {k === 'C' ? 'Do (aucune)' : k}
@@ -517,7 +523,13 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
         </label>
         <label className="solo-opt">
           Mesure
-          <select value={solo.timeSig} onChange={(e) => changeTimeSig(e.target.value as TimeSig)}>
+          <select
+            value={solo.timeSig}
+            onChange={(e) => {
+              changeTimeSig(e.target.value as TimeSig);
+              e.currentTarget.blur();
+            }}
+          >
             <option value="4/4">4/4</option>
             <option value="3/4">3/4</option>
             <option value="2/4">2/4</option>
@@ -527,7 +539,10 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
           Mes./ligne
           <select
             value={solo.measuresPerLine}
-            onChange={(e) => update({ ...soloRef.current, measuresPerLine: Number(e.target.value) })}
+            onChange={(e) => {
+              update({ ...soloRef.current, measuresPerLine: Number(e.target.value) });
+              e.currentTarget.blur();
+            }}
           >
             {[1, 2, 3, 4, 5, 6].map((n) => (
               <option key={n} value={n}>
@@ -603,6 +618,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
           return mi >= 0 && ni >= 0 ? `M${mi + 1} n${ni + 1}` : null;
         })()}
         onPlayingId={setPlayingId}
+        onClearSelection={() => setSelected([])}
       />
 
       {systems.map((measures, si) => {
