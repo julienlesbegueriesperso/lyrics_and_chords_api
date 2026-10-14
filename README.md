@@ -21,13 +21,18 @@ Sans `.env`, l'app affiche l'aide de configuration au lieu du formulaire de conn
 2. **Authentication → Users → Add user** : crée ton compte (email + mot de passe).
    L'inscription publique depuis l'app est désactivée par défaut
    (`VITE_ALLOW_SIGNUP=true` pour l'activer).
-3. Renseigne `.env` (local) et les variables d'environnement sur Vercel (prod).
+3. **SQL Editor → New query** : exécute le contenu de `supabase/songs.sql`
+   (table `songs` + RLS : chaque utilisateur ne voit que ses chansons).
+4. Renseigne `.env` (local) et les variables d'environnement sur Vercel (prod).
 
 Notes de sécurité :
 - Les mots de passe sont hashés côté Supabase, jamais dans le bundle ; la clé
   publishable est publique par conception. HTTPS fourni par Vercel.
-- L'authentification verrouille l'accès à l'outil ; les chansons restent
-  stockées dans le `localStorage` du navigateur (par appareil, non chiffrées).
+- L'authentification verrouille l'accès à l'outil ; les chansons sont
+  stockées dans Supabase (table `songs`, RLS par utilisateur), plus
+  dans le `localStorage` (sauf la chanson ouverte, simple état d'UI).
+  Au premier chargement, les chansons du `localStorage` sont migrées
+  automatiquement vers Supabase.
 
 ## Déploiement Vercel
 

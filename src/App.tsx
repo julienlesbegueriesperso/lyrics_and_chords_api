@@ -23,7 +23,8 @@ const PrintDoc = lazy(() => import('./components/PrintDoc').then((m) => ({ defau
 
 export default function App() {
   const session = useSession();
-  const { songs, active, setActiveId, createSong, deleteSong, updateSong, importSongs } = useSongs();
+  const { songs, active, setActiveId, createSong, deleteSong, updateSong, importSongs, status, sync, error, reload, retry } =
+    useSongs(session?.user?.id ?? null);
   const [mode, setMode] = useState<'edit' | 'view'>('edit');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState('');
@@ -118,6 +119,32 @@ export default function App() {
     );
   }
 
+  if (status === 'loading') {
+    return (
+      <div className="auth-wrap">
+        <div className="auth-card">
+          <h1>Paroles &amp; accords</h1>
+          <p>Chargement des chansons…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === 'error' && songs.length === 0) {
+    return (
+      <div className="auth-wrap">
+        <div className="auth-card">
+          <h1>Paroles &amp; accords</h1>
+          <p>Impossible de charger les chansons : {error ?? 'erreur inconnue'}</p>
+          <p className="hint">Vérifie que la table <code>songs</code> existe (voir <code>supabase/songs.sql</code>).</p>
+          <button type="button" className="btn primary" onClick={() => void reload()}>
+            Réessayer
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -182,6 +209,15 @@ export default function App() {
         </ul>
 
         <div className="sidebar-foot">
+          <div className="sync-row" title={error ?? 'Chansons synchronisées avec Supabase'}>
+            <span className={`sync-dot ${sync}`} aria-hidden="true" />
+            <span>{sync === 'saved' ? 'Enregistré' : sync === 'saving' ? 'Enregistrement…' : 'Erreur de synchro'}</span>
+            {sync === 'error' && (
+              <button type="button" className="btn ghost" onClick={retry}>
+                Réessayer
+              </button>
+            )}
+          </div>
           <div className="io-row">
             <button type="button" className="btn" onClick={() => mdInputRef.current?.click()}>
               Import .md
