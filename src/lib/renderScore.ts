@@ -40,10 +40,12 @@ export function renderSystem(
     totalSystems: number;
     measureW?: number;
     selectedId?: string | string[] | null;
+    playingId?: string | string[] | null;
   },
 ): ScoreGeom {
-  const { solo, measures, systemIndex: si, totalSystems, measureW = SCORE.measureW, selectedId = null } = args;
+  const { solo, measures, systemIndex: si, totalSystems, measureW = SCORE.measureW, selectedId = null, playingId = null } = args;
   const selected = new Set(Array.isArray(selectedId) ? selectedId : selectedId ? [selectedId] : []);
+  const playing = new Set(Array.isArray(playingId) ? playingId : playingId ? [playingId] : []);
   host.innerHTML = '';
   const capacity = TIME_CAPACITY[solo.timeSig];
   const widths = measures.map((_, i) => measureW + (i === 0 ? (si === 0 ? 110 : 70) : 0));
@@ -92,6 +94,7 @@ export function renderSystem(
       }
       if (n.dotted) Dot.buildAndAttach([sn], { all: true });
       if (selected.has(n.id)) sn.setStyle({ fillStyle: '#aa3bff', strokeStyle: '#aa3bff' });
+      if (playing.has(n.id)) sn.setStyle({ fillStyle: '#e8590c', strokeStyle: '#e8590c' });
       snById.set(n.id, sn);
       return sn;
     });

@@ -18,6 +18,7 @@ import {
   type SoloMeasure,
   type TimeSig,
 } from '../lib/solo';
+import { SoloPlayer } from './SoloPlayer';
 
 const DUR_ORDER: NoteDur[] = ['w', 'h', 'q', '8', '16'];
 const DUR_SHORT: Record<NoteDur, string> = { w: 'Ronde', h: 'Blanche', q: 'Noire', '8': 'Croche', '16': 'Double' };
@@ -35,6 +36,7 @@ interface Props {
 
 export function SoloEditor({ solo, onChange, onDelete }: Props) {
   const [selected, setSelected] = useState<Selection[]>([]);
+  const [playingId, setPlayingId] = useState<string | null>(null);
   const [addDur, setAddDur] = useState<NoteDur>('q');
   const [addMode, setAddMode] = useState<'note' | 'rest'>('note');
   const [warn, setWarn] = useState<string | null>(null);
@@ -111,10 +113,11 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
         systemIndex: si,
         totalSystems: systems.length,
         selectedId: selected.map((s) => s.noteId),
+        playingId,
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [solo, selected]);
+  }, [solo, selected, playingId]);
 
   // ---------- interactions ----------
   const posToStep = (y: number): number => {
@@ -589,6 +592,18 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
         <span className="solo-hint">Clic = insérer à l'endroit cliqué · Glisser = hauteur · Ctrl/Cmd+clic = multi-sélection · Clavier : ↑↓ hauteur · ←→ durée · . pointée · L lier · ⌫ supprimer · Ctrl+Z annuler</span>
       </div>
       {warn && <div className="solo-warn">{warn}</div>}
+
+      <SoloPlayer
+        solo={solo}
+        startNoteId={primary?.noteId ?? null}
+        startLabel={(() => {
+          if (!primary) return null;
+          const mi = solo.measures.findIndex((m) => m.id === primary.measureId);
+          const ni = solo.measures[mi]?.notes.findIndex((n) => n.id === primary.noteId) ?? -1;
+          return mi >= 0 && ni >= 0 ? `M${mi + 1} n${ni + 1}` : null;
+        })()}
+        onPlayingId={setPlayingId}
+      />
 
       {systems.map((measures, si) => {
         const base = si * solo.measuresPerLine;
