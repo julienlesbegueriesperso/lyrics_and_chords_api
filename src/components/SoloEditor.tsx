@@ -28,6 +28,19 @@ interface Selection {
   noteId: string;
 }
 
+/**
+ * Registre des éditeurs montés : la sélection est exclusive entre solos.
+ * Sans ça, les raccourcis clavier globaux (↑↓ durée/hauteur, ⌫, L, .) agiraient
+ * dans tous les éditeurs ayant une sélection résiduelle.
+ */
+const clearSelectionRegistry = new Map<string, () => void>();
+
+function claimSelection(soloId: string) {
+  for (const [id, clear] of clearSelectionRegistry) {
+    if (id !== soloId) clear();
+  }
+}
+
 interface Props {
   solo: Solo;
   onChange: (s: Solo) => void;
@@ -44,6 +57,8 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
   const svgRefs = useRef<Array<HTMLDivElement | null>>([]);
   const geomRef = useRef<ScoreGeom[]>([]);
   const dragRef = useRef<Selection | null>(null);
+  /** Point d'ancrage du glisser : hauteur d'origine + Y de départ → déplacement relatif. */
+  const grabRef = useRef<{ py: number; step: number } | null>(null);
   // Historique annuler/refaire (10 actions), local au solo
   const pastRef = useRef<Solo[]>([]);
   const futureRef = useRef<Solo[]>([]);
@@ -51,6 +66,15 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
   const [, setHistTick] = useState(0);
   const soloRef = useRef(solo);
   soloRef.current = solo;
+
+  // Enregistre (et désenregistre) cet éditeur pour l'exclusivité de sélection.
+  useEffect(() => {
+    clearSelectionRegistry.set(solo.id, () => setSelected([]));
+    return () => {
+      if (clearSelectionRegistry.get(solo.id)) clearSelectionRegistry.delete(solo.id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [solo.id]);
 
   const capacity = TIME_CAPACITY[solo.timeSig];
   const systems: SoloMeasure[][] = [];
@@ -106,7 +130,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
   useEffect(() => {
     geomRef.current = systems.map((measures, si) => {
       const host = svgRefs.current[si];
-      if (!host) return { measureX: [], measureW: [], noteX: [] };
+      if (!host) return { measureX: [], measureW: [], noteX: [], staveTopY: [], halfSpacing: 0 };
       return renderSystem(host, {
         solo,
         measures,
@@ -120,10 +144,17 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
   }, [solo, selected, playingId]);
 
   // ---------- interactions ----------
-  const posToStep = (y: number): number => {
-    const idx = Math.round(F5_INDEX - (y - SCORE.staveY) / (SCORE.spacing / 2));
+  /** Y-souris → degré : calibré sur la portée réellement rendue (par mesure). */
+  const stepAtY = (si: number, localMi: number, y: number): number => {
+    const geom = geomRef.current[si];
+    const top = geom?.staveTopY[localMi] ?? SCORE.staveY;
+    const half = geom && geom.halfSpacing > 0 ? geom.halfSpacing : SCORE.spacing / 2;
+    const idx = Math.round(F5_INDEX - (y - top) / half);
     return Math.max(0, Math.min(STEPS.length - 1, idx));
   };
+  /** Demi-interligne réel (pour le glisser relatif), avec repli constant. */
+  const measuredHalf = (): number =>
+    geomRef.current.map((g) => g.halfSpacing).find((h) => h > 0) ?? SCORE.spacing / 2;
 
   const findNote = (m: SoloMeasure, id: string) => m.notes.find((n) => n.id === id);
 
@@ -140,6 +171,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
     const measure = solo.measures[globalMi];
     const hit = geom.noteX[localMi].find((p) => Math.abs(p.x - px) < 22);
     if (hit) {
+      claimSelection(soloRef.current.id);
       const sel = { measureId: measure.id, noteId: hit.id };
       // Ctrl/Cmd/Shift + clic = multi-sélection (pour lier plusieurs notes)
       if (e.ctrlKey || e.metaKey || e.shiftKey) {
@@ -150,17 +182,22 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
         setSelected([sel]);
       }
       dragRef.current = { measureId: measure.id, noteId: hit.id };
+      // Ancre relative : un simple clic (micro-mouvement) ne change jamais la hauteur.
+      const grabbed = measure.notes.find((n) => n.id === hit.id);
+      const grabStep = grabbed && grabbed.pitch !== 'R' ? stepIndexOf(grabbed.pitch) : -1;
+      grabRef.current = grabStep >= 0 ? { py, step: grabStep } : null;
       dragStartRef.current = soloRef.current;
       e.currentTarget.setPointerCapture(e.pointerId);
       return;
     }
     // Ajout à l'endroit cliqué : l'index d'insertion suit la position X
     // par rapport aux notes déjà rendues (entre 2 notes = entre les 2).
+    claimSelection(soloRef.current.id);
     if (!canFit(measure, solo.timeSig, addDur)) {
       flash(`Mesure pleine (${solo.timeSig})`);
       return;
     }
-    const pitch = addMode === 'rest' ? 'R' : pitchAtStep(posToStep(py), solo.keySig);
+    const pitch = addMode === 'rest' ? 'R' : pitchAtStep(stepAtY(si, localMi, py), solo.keySig);
     const note = { id: uid(), pitch, dur: addDur };
     const at = geom.noteX[localMi].filter((p) => p.x < px).length;
     patchMeasures((ms) =>
@@ -298,10 +335,13 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
 
   const handleMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
-    if (!drag) return;
+    const grab = grabRef.current;
+    if (!drag || !grab) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const py = e.clientY - rect.top;
-    setNoteStep(drag.measureId, drag.noteId, posToStep(py), false);
+    // Déplacement relatif à l'ancre : pas de saut au clic, 1 degré par demi-interligne.
+    const delta = Math.round((grab.py - py) / measuredHalf());
+    setNoteStep(drag.measureId, drag.noteId, grab.step + delta, false);
   };
 
   const endDrag = () => {
@@ -311,6 +351,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
     }
     dragStartRef.current = null;
     dragRef.current = null;
+    grabRef.current = null;
   };
 
   // ---------- panneau note sélectionnée ----------

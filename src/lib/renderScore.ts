@@ -22,6 +22,10 @@ export interface ScoreGeom {
   measureX: number[];
   measureW: number[];
   noteX: Array<Array<{ id: string; x: number }>>;
+  /** Y (SVG) de la 1re ligne (Fa5) de chaque mesure : calibre le clic → hauteur. */
+  staveTopY: number[];
+  /** Demi-interligne réel (un degré diatonique) : calibre le glisser. */
+  halfSpacing: number;
 }
 
 function vexKey(pitch: string): string {
@@ -53,7 +57,7 @@ export function renderSystem(
   const renderer = new Renderer(host, Renderer.Backends.SVG);
   renderer.resize(totalW, SCORE.height);
   const ctx = renderer.getContext();
-  const geom: ScoreGeom = { measureX: [], measureW: [], noteX: [] };
+  const geom: ScoreGeom = { measureX: [], measureW: [], noteX: [], staveTopY: [], halfSpacing: SCORE.spacing / 2 };
   // Ordre global des notes (toutes mesures) pour les liaisons, y compris entre mesures.
   const flat: Array<{ mId: string; nId: string; pitch: string }> = [];
   solo.measures.forEach((mm) => mm.notes.forEach((n) => flat.push({ mId: mm.id, nId: n.id, pitch: n.pitch })));
@@ -72,6 +76,10 @@ export function renderSystem(
       stave.setEndBarType(Barline.type.END);
     }
     stave.setContext(ctx).draw();
+    // Géométrie mesurée (auto-calibrée, insensible aux options VexFlow) :
+    // Y de la 1re ligne + demi-interligne réel déduit des lignes extrêmes.
+    geom.staveTopY.push(stave.getYForLine(0));
+    geom.halfSpacing = (stave.getYForLine(4) - stave.getYForLine(0)) / 8;
 
     const snList: StaveNote[] = m.notes.map((n) => {
       const isRest = n.pitch === 'R';
