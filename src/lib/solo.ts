@@ -17,7 +17,8 @@ export const KEY_SIGS = ['C', 'G', 'D', 'A', 'E', 'F', 'Bb', 'Eb'] as const;
 export type KeySig = (typeof KEY_SIGS)[number];
 
 /** pitch "C5", "F#4", "Bb3" ou "R" pour un silence. chord : accord optionnel au-dessus.
- *  tie : liaison de prolongation vers la note suivante (même hauteur). */
+ *  tie : liaison de prolongation vers la note suivante (même hauteur).
+ *  tuplet : id de groupe de triolet (3 notes en le temps de 2, mêmes durées). */
 export interface SoloNote {
   id: string;
   pitch: string;
@@ -25,6 +26,7 @@ export interface SoloNote {
   dotted?: boolean;
   chord?: string;
   tie?: boolean;
+  tuplet?: string;
 }
 
 export interface SoloMeasure {
@@ -66,8 +68,54 @@ export function noteBeats(n: Pick<SoloNote, 'dur' | 'dotted'>): number {
   return DUR_BEATS[n.dur] * (n.dotted ? 1.5 : 1);
 }
 
+/**
+ * Totaux consécutifs de notes partageant le même id de triolet, dans une mesure.
+ * Seuls les groupes d'exactement 3 notes sont des triolets valides (3 en le temps de 2).
+ */
+export function tupletRuns(m: SoloMeasure): SoloNote[][] {
+  const runs: SoloNote[][] = [];
+  let cur: SoloNote[] = [];
+  for (const n of m.notes) {
+    if (n.tuplet && cur.length > 0 && cur[0].tuplet === n.tuplet) cur.push(n);
+    else {
+      if (cur.length > 0) runs.push(cur);
+      cur = n.tuplet ? [n] : [];
+    }
+  }
+  if (cur.length > 0) runs.push(cur);
+  return runs;
+}
+
+/** Durée effective : un membre d'un triolet valide vaut 2/3 de sa durée nominale. */
+export function effectiveBeats(m: SoloMeasure, n: SoloNote): number {
+  if (!n.tuplet) return noteBeats(n);
+  const ok = tupletRuns(m).some((r) => r.length === 3 && r.some((x) => x.id === n.id));
+  return noteBeats(n) * (ok ? 2 / 3 : 1);
+}
+
 export function measureBeats(m: SoloMeasure): number {
-  return m.notes.reduce((s, n) => s + noteBeats(n), 0);
+  return m.notes.reduce((s, n) => s + effectiveBeats(m, n), 0);
+}
+
+/** Enlève les marques de triolet des groupes incomplets (!== 3 notes consécutives). */
+export function clearIncompleteTuplets(measures: SoloMeasure[]): SoloMeasure[] {
+  let changed = false;
+  const out = measures.map((m) => {
+    const valid = new Set(tupletRuns(m).filter((r) => r.length === 3).flatMap((r) => r.map((n) => n.id)));
+    if (m.notes.every((n) => !n.tuplet || valid.has(n.id))) return m;
+    changed = true;
+    return {
+      ...m,
+      notes: m.notes.map((n) => {
+        if (n.tuplet && !valid.has(n.id)) {
+          const { tuplet: _drop, ...rest } = n;
+          return rest;
+        }
+        return n;
+      }),
+    };
+  });
+  return changed ? out : measures;
 }
 
 /** Peut-on ajouter / passer à `dur` (+ point éventuel) dans cette mesure (contrôle strict) ? */
@@ -78,7 +126,7 @@ export function canFit(
   ignoreNoteId?: string,
   dotted = false,
 ): boolean {
-  const used = measure.notes.reduce((s, n) => (n.id === ignoreNoteId ? s : s + noteBeats(n)), 0);
+  const used = measure.notes.reduce((s, n) => (n.id === ignoreNoteId ? s : s + effectiveBeats(measure, n)), 0);
   return used + DUR_BEATS[dur] * (dotted ? 1.5 : 1) <= TIME_CAPACITY[timeSig] + 1e-9;
 }
 
@@ -186,20 +234,26 @@ export function respellSolo(solo: Solo, useSharps: boolean): Solo {
 // ---------- Sérialisation bloc ```solo ----------
 
 export function serializeSolo(solo: Solo): string {
-  const lines = solo.measures.map((m) =>
-    m.notes
+  const lines = solo.measures.map((m) => {
+    // Index de groupe de triolet (1, 2, ...) : lève l'ambiguïté entre triolets adjacents.
+    const groupIndex = new Map<string, number>();
+    for (const n of m.notes) {
+      if (n.tuplet && !groupIndex.has(n.tuplet)) groupIndex.set(n.tuplet, groupIndex.size + 1);
+    }
+    return m.notes
       .map((n) => {
         const chord = n.chord ? `[${n.chord}]` : '';
         const body = n.pitch === 'R' ? `${n.dur}${n.dotted ? '.' : ''}:R` : `${n.dur}${n.dotted ? '.' : ''}:${n.pitch}`;
-        return `${chord}${body}${n.tie ? '~' : ''}`;
+        const tup = n.tuplet ? `{3:${groupIndex.get(n.tuplet) ?? 1}}` : '';
+        return `${chord}${body}${n.tie ? '~' : ''}${tup}`;
       })
-      .join(' '),
-  );
+      .join(' ');
+  });
   const head = `\`\`\`solo "${solo.title.replace(/"/g, "'")}" key=${solo.keySig} time=${solo.timeSig} mpl=${solo.measuresPerLine}`;
   return `${head}\n${lines.join(' | ')}\n\`\`\``;
 }
 
-const TOKEN_RE = /^(?:\[([^\]]+)\])?([whq]|16|8)(\.?):([A-G][#b]?-?\d|R)(~?)$/;
+const TOKEN_RE = /^(?:\[([^\]]+)\])?([whq]|16|8)(\.?):([A-G][#b]?-?\d|R)(~?)(\{3(?::(\d+))?\})?$/;
 
 export function parseSoloBlock(title: string, keySig: string, timeSig: string, mpl: string, body: string): Solo {
   if (!KEY_SIGS.includes(keySig as KeySig)) throw new Error(`Armature inconnue : ${keySig}`);
@@ -213,23 +267,34 @@ export function parseSoloBlock(title: string, keySig: string, timeSig: string, m
     .filter((s) => s.length > 0);
   const measures: SoloMeasure[] = measureTexts.map((mt, mi) => {
     const tokens = mt.split(/\s+/).filter(Boolean);
-    let used = 0;
-    const notes: SoloNote[] = tokens.map((tok) => {
+    const tupIds = new Map<string, string>(); // "groupe du bloc" -> id stable
+    const notes: SoloNote[] = [];
+    for (const tok of tokens) {
       const m = tok.match(TOKEN_RE);
       if (!m) throw new Error(`Mesure ${mi + 1} : note invalide « ${tok} »`);
-      const [, chord, dur, dot, pitch, tie] = m;
+      const [, chord, dur, dot, pitch, tie, tupBrace, tupNum] = m;
       if (chord !== undefined && !isChordToken(chord)) throw new Error(`Mesure ${mi + 1} : accord invalide « ${chord} »`);
-      used += DUR_BEATS[dur as NoteDur] * (dot === '.' ? 1.5 : 1);
-      if (used > capacity + 1e-9) throw new Error(`Mesure ${mi + 1} : dépasse ${time}`);
-      return {
+      let tuplet: string | undefined;
+      if (tupBrace !== undefined) {
+        const key = `${mi}:${tupNum ?? '1'}`;
+        if (!tupIds.has(key)) tupIds.set(key, uid());
+        tuplet = tupIds.get(key);
+      }
+      const note: SoloNote = {
         id: uid(),
         pitch,
         dur: dur as NoteDur,
         ...(dot === '.' ? { dotted: true } : {}),
         ...(chord ? { chord } : {}),
         ...(tie === '~' ? { tie: true as const } : {}),
+        ...(tuplet ? { tuplet } : {}),
       };
-    });
+      notes.push(note);
+    }
+    // Contrôle de capacité avec durées effectives (triolets = 2/3).
+    const tmp: SoloMeasure = { id: 'tmp', notes };
+    const used = notes.reduce((s, n) => s + effectiveBeats(tmp, n), 0);
+    if (used > capacity + 1e-9) throw new Error(`Mesure ${mi + 1} : dépasse ${time}`);
     return { id: uid(), notes };
   });
   if (measures.length === 0) measures.push(newMeasure());

@@ -10,9 +10,10 @@ import {
   Stave,
   StaveNote,
   StaveTie,
+  Tuplet,
   Voice,
 } from 'vexflow';
-import { defaultAccidental, splitPitch, stepIndexOf, TIME_CAPACITY, type Solo, type SoloMeasure } from './solo';
+import { defaultAccidental, splitPitch, stepIndexOf, tupletRuns, TIME_CAPACITY, type Solo, type SoloMeasure } from './solo';
 
 /** Géométrie partagée : SoloEditor (interactions) + impression (lecture seule). */
 export const SCORE = { measureW: 230, spacing: 12, staveY: 64, height: 190 } as const;
@@ -118,6 +119,7 @@ export function renderSystem(
 
     // Liaisons créées AVANT format/draw : Beam(autoStem) fige la direction
     // des hampes, voice.draw() les dessine ensuite de façon cohérente.
+    // Les ligatures ne traversent pas les frontières de triolet.
     const beams: Beam[] = [];
     let run: StaveNote[] = [];
     const flush = () => {
@@ -125,10 +127,26 @@ export function renderSystem(
       run = [];
     };
     m.notes.forEach((n, ni) => {
-      if ((n.dur === '8' || n.dur === '16') && n.pitch !== 'R') run.push(snList[ni]);
-      else flush();
+      const beamable = (n.dur === '8' || n.dur === '16') && n.pitch !== 'R';
+      const prev = ni > 0 ? m.notes[ni - 1] : undefined;
+      if (!beamable || (prev && (prev.tuplet ?? null) !== (n.tuplet ?? null))) flush();
+      if (beamable) run.push(snList[ni]);
     });
     flush();
+
+    // Crochets de triolet : groupes valides (exactement 3 notes consécutives).
+    const snByIndex = new Map(m.notes.map((n, ni) => [n.id, snList[ni]]));
+    const tuplets: Tuplet[] = [];
+    for (const r of tupletRuns(m)) {
+      if (r.length !== 3) continue;
+      const sns = r.map((n) => snByIndex.get(n.id)).filter((s): s is StaveNote => !!s);
+      if (sns.length !== 3) continue;
+      try {
+        tuplets.push(new Tuplet(sns, { numNotes: 3, notesOccupied: 2, bracketed: true, ratioed: false }));
+      } catch {
+        /* groupe non dessinable : ignore */
+      }
+    }
 
     const voice = new Voice({ numBeats: capacity, beatValue: 4 });
     voice.setStrict(false);
@@ -137,6 +155,7 @@ export function renderSystem(
     new Formatter().joinVoices([voice]).formatToStave([voice], stave);
     voice.draw(ctx, stave);
     beams.forEach((b) => b.setContext(ctx).draw());
+    tuplets.forEach((t) => t.setContext(ctx).draw());
 
     geom.measureX.push(x);
     geom.measureW.push(w);

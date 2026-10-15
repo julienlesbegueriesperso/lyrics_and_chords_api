@@ -3,6 +3,7 @@ import { isChordToken } from '../lib/chords';
 import { F5_INDEX, SCORE, renderSystem, type ScoreGeom } from '../lib/renderScore';
 import {
   canFit,
+  clearIncompleteTuplets,
   measureBeats,
   newMeasure,
   pitchAtStep,
@@ -265,6 +266,10 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
 
   const toggleSelDot = () => {
     if (!selMeasure || !selNote) return;
+    if (selNote.tuplet) {
+      flash("Retire le triolet d'abord (sélectionne les 3 notes + Triolet)");
+      return;
+    }
     const dotted = !selNote.dotted;
     if (dotted && !canFit(selMeasure, solo.timeSig, selNote.dur, selNote.id, true)) {
       flash(`Mesure pleine (${solo.timeSig})`);
@@ -287,7 +292,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
     const notes = [...selMeasure.notes];
     const [n] = notes.splice(i, 1);
     notes.splice(j, 0, n);
-    patchMeasures((ms) => clearDanglingTies(ms.map((mm) => (mm.id === selMeasure.id ? { ...mm, notes } : mm))));
+    patchMeasures((ms) => clearDanglingTies(clearIncompleteTuplets(ms.map((mm) => (mm.id === selMeasure.id ? { ...mm, notes } : mm)))));
   };
 
   // Clavier : note sélectionnée = ↑↓ hauteur, ←→ durée, . pointée, L lier, ⌫ supprimer, Échap fermer.
@@ -334,6 +339,11 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
         case 'L':
           e.preventDefault();
           tiePrimary();
+          break;
+        case 't':
+        case 'T':
+          e.preventDefault();
+          toggleTriplet();
           break;
         case 'Delete':
         case 'Backspace':
@@ -495,9 +505,78 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
       (n, i) => (selIds.has(n.id) && n.tie) || (n.tie && flat[i + 1] !== undefined && selIds.has(flat[i + 1].id)),
     );
   })();
+  const selHasTuplet = selected.some((s) =>
+    solo.measures.some((m) => m.notes.some((n) => n.id === s.noteId && n.tuplet)),
+  );
+
+  /** Triolet : 3 notes consécutives de même durée → 3 en le temps de 2 (crochet « 3 »). */
+  const toggleTriplet = () => {
+    if (selected.length === 0) return;
+    const flat = flatNotes();
+    const byId = new Map(flat.map((f) => [f.note.id, f]));
+    if (selHasTuplet) {
+      // Retire le marquage des notes sélectionnées (les groupes incomplets sont nettoyés).
+      patchMeasures((ms) =>
+        clearIncompleteTuplets(
+          ms.map((mm) => ({
+            ...mm,
+            notes: mm.notes.map((n) => {
+              if (selIds.has(n.id) && n.tuplet) {
+                const { tuplet: _drop, ...rest } = n;
+                return rest;
+              }
+              return n;
+            }),
+          })),
+        ),
+      );
+      return;
+    }
+    if (selected.length !== 3) {
+      flash('Triolet : sélectionne exactement 3 notes consécutives (Ctrl/Cmd+clic)');
+      return;
+    }
+    const sel = selected.map((s) => byId.get(s.noteId)).filter((f): f is (typeof flat)[number] => !!f);
+    if (sel.length !== 3) return;
+    if (new Set(sel.map((f) => f.measureId)).size !== 1) {
+      flash('Triolet : les 3 notes doivent être dans la même mesure');
+      return;
+    }
+    const measure = soloRef.current.measures.find((m) => m.id === sel[0].measureId);
+    if (!measure) return;
+    const idx = sel
+      .map((f) => measure.notes.findIndex((n) => n.id === f.note.id))
+      .sort((a, b) => a - b);
+    if (idx[0] < 0 || idx[2] - idx[0] !== 2) {
+      flash('Triolet : les 3 notes doivent se suivre (sans note entre elles)');
+      return;
+    }
+    const three = idx.map((i) => measure.notes[i]);
+    if (new Set(three.map((n) => n.dur)).size !== 1) {
+      flash('Triolet : 3 notes de même durée (ex. 3 noires ou 3 croches)');
+      return;
+    }
+    if (three.some((n) => n.dotted)) {
+      flash('Triolet : pas de notes pointées');
+      return;
+    }
+    const gid = uid();
+    const ids = new Set(three.map((n) => n.id));
+    patchMeasures((ms) =>
+      ms.map((mm) =>
+        mm.id === measure.id
+          ? { ...mm, notes: mm.notes.map((n) => (ids.has(n.id) ? { ...n, tuplet: gid } : n)) }
+          : mm,
+      ),
+    );
+  };
 
   const setSelDur = (dur: NoteDur) => {
     if (!selMeasure || !selNote || selected.length === 0) return;
+    if (selNote.tuplet) {
+      flash("Retire le triolet d'abord (sélectionne les 3 notes + Triolet)");
+      return;
+    }
     if (!canFit(selMeasure, solo.timeSig, dur, selNote.id)) {
       flash(`Mesure pleine (${solo.timeSig})`);
       return;
@@ -515,7 +594,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
     if (selected.length === 0) return;
     const ids = new Set(selected.map((s) => s.noteId));
     patchMeasures((ms) =>
-      clearDanglingTies(ms.map((mm) => ({ ...mm, notes: mm.notes.filter((n) => !ids.has(n.id)) }))),
+      clearDanglingTies(clearIncompleteTuplets(ms.map((mm) => ({ ...mm, notes: mm.notes.filter((n) => !ids.has(n.id)) })))),
     );
     setSelected([]);
   };
@@ -663,7 +742,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
             {DUR_SHORT[d]}
           </button>
         ))}
-        <span className="solo-hint">Clic près d'une note = sélectionner · ailleurs = insérer à hauteur du clic · Glisser = hauteur · Ctrl/Cmd+clic = multi-sélection · Clavier : ↑↓ hauteur · ←→ durée · . pointée · L lier · ⌫ supprimer · Ctrl+Z annuler</span>
+        <span className="solo-hint">Clic près d'une note = sélectionner · ailleurs = insérer à hauteur du clic · Glisser = hauteur · Ctrl/Cmd+clic = multi-sélection · Clavier : ↑↓ hauteur · ←→ durée · . pointée · L lier · T triolet · ⌫ supprimer · Ctrl+Z annuler</span>
       </div>
       {warn && <div className="solo-warn">{warn}</div>}
 
@@ -709,7 +788,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
                       title={`Supprimer la mesure ${base + i + 1}`}
                       disabled={solo.measures.length <= 1}
                       onClick={() => {
-                        patchMeasures((ms) => clearDanglingTies(ms.filter((mm) => mm.id !== m.id)));
+                        patchMeasures((ms) => clearDanglingTies(clearIncompleteTuplets(ms.filter((mm) => mm.id !== m.id))));
                         setSelected((prev) => prev.filter((s) => s.measureId !== m.id));
                       }}
                     >
@@ -732,6 +811,14 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
           </button>
           <button type="button" className="btn ghost" onClick={untieSelection} disabled={!selHasTie} title="Enlever les liaisons des notes sélectionnées">
             Délier
+          </button>
+          <button
+            type="button"
+            className={selHasTuplet ? 'active' : ''}
+            onClick={toggleTriplet}
+            title="Triolet : 3 notes consécutives de même durée jouées en le temps de 2 (touche T). Re-cliquer retire le triolet."
+          >
+            Triolet 3
           </button>
           <button type="button" className="btn ghost" onClick={deleteSelNote}>
             Supprimer ({selected.length})

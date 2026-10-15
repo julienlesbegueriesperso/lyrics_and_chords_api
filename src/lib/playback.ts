@@ -1,4 +1,4 @@
-import { noteBeats, pitchToMidi, type Solo } from './solo';
+import { effectiveBeats, pitchToMidi, type Solo } from './solo';
 
 /** Un segment = une note/silence positionné en temps (temps en battements, noire = 1). */
 export interface PlaySeg {
@@ -24,7 +24,7 @@ export function buildSegments(solo: Solo): PlaySeg[] {
   let t = 0;
   solo.measures.forEach((m, mi) => {
     m.notes.forEach((n, ni) => {
-      const d = noteBeats(n);
+      const d = effectiveBeats(m, n);
       segs.push({
         id: n.id,
         midi: n.pitch === 'R' ? null : pitchToMidi(n.pitch),
@@ -70,7 +70,7 @@ export function beatOfNote(solo: Solo, noteId: string): number | null {
   for (const m of solo.measures) {
     for (const n of m.notes) {
       if (n.id === noteId) return t;
-      t += noteBeats(n);
+      t += effectiveBeats(m, n);
     }
   }
   return null;
