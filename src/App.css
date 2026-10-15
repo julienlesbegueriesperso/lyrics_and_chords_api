@@ -561,7 +561,7 @@
   position: relative;
   cursor: crosshair;
   overflow-x: auto;
-  touch-action: none;
+  touch-action: pan-x; /* scroll tactile horizontal OK ; le glisser vertical reste pour la hauteur */
   border-radius: 8px;
 }
 

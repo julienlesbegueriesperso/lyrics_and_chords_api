@@ -160,16 +160,33 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
 
   const handleDown = (si: number, e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
+    const el = e.currentTarget;
+    const rect = el.getBoundingClientRect();
+    // La zone défile (overflow-x) : les coordonnées doivent être relatives au
+    // CONTENU (SVG), pas à la partie visible → ajouter le décalage de scroll.
+    // Sans ça, tout clic après un scroll horizontal tombe à côté (mauvaise note / mesure).
+    const px = e.clientX - rect.left + el.scrollLeft;
+    const py = e.clientY - rect.top + el.scrollTop;
     const geom = geomRef.current[si];
-    if (!geom) return;
-    const localMi = geom.measureX.findIndex((mx, i) => px >= mx && px <= mx + geom.measureW[i]);
-    if (localMi < 0) return;
+    if (!geom || geom.measureX.length === 0) return;
+    let localMi = geom.measureX.findIndex((mx, i) => px >= mx && px <= mx + geom.measureW[i]);
+    if (localMi < 0) {
+      // Zones mortes horizontales (marge gauche, fin de portée) : rabattre sur la mesure la plus proche.
+      if (px >= 0 && px < geom.measureX[0]) {
+        localMi = 0;
+      } else {
+        const last = geom.measureX.length - 1;
+        if (px >= geom.measureX[last] + geom.measureW[last] && px <= el.scrollWidth + 1) localMi = last;
+        else return;
+      }
+    }
     const globalMi = si * solo.measuresPerLine + localMi;
     const measure = solo.measures[globalMi];
-    const hit = geom.noteX[localMi].find((p) => Math.abs(p.x - px) < 22);
+    // Sélection seulement si le clic est près d'une tête de note (X et Y) ;
+    // sinon = insertion à l'endroit et à la hauteur cliqués (y c. en fin de mesure).
+    const near = geom.noteX[localMi].filter((p) => Math.abs(p.x - px) < 22 && Math.abs(p.y - py) < 18);
+    near.sort((a, b) => Math.abs(a.x - px) - Math.abs(b.x - px));
+    const hit = near[0];
     if (hit) {
       claimSelection(soloRef.current.id);
       const sel = { measureId: measure.id, noteId: hit.id };
@@ -337,8 +354,9 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
     const drag = dragRef.current;
     const grab = grabRef.current;
     if (!drag || !grab) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const py = e.clientY - rect.top;
+    const el = e.currentTarget;
+    const rect = el.getBoundingClientRect();
+    const py = e.clientY - rect.top + el.scrollTop; // cf. handleDown : relatif au contenu
     // Déplacement relatif à l'ancre : pas de saut au clic, 1 degré par demi-interligne.
     const delta = Math.round((grab.py - py) / measuredHalf());
     setNoteStep(drag.measureId, drag.noteId, grab.step + delta, false);
@@ -645,7 +663,7 @@ export function SoloEditor({ solo, onChange, onDelete }: Props) {
             {DUR_SHORT[d]}
           </button>
         ))}
-        <span className="solo-hint">Clic = insérer à l'endroit cliqué · Glisser = hauteur · Ctrl/Cmd+clic = multi-sélection · Clavier : ↑↓ hauteur · ←→ durée · . pointée · L lier · ⌫ supprimer · Ctrl+Z annuler</span>
+        <span className="solo-hint">Clic près d'une note = sélectionner · ailleurs = insérer à hauteur du clic · Glisser = hauteur · Ctrl/Cmd+clic = multi-sélection · Clavier : ↑↓ hauteur · ←→ durée · . pointée · L lier · ⌫ supprimer · Ctrl+Z annuler</span>
       </div>
       {warn && <div className="solo-warn">{warn}</div>}
 

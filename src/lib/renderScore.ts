@@ -12,7 +12,7 @@ import {
   StaveTie,
   Voice,
 } from 'vexflow';
-import { defaultAccidental, splitPitch, TIME_CAPACITY, type Solo, type SoloMeasure } from './solo';
+import { defaultAccidental, splitPitch, stepIndexOf, TIME_CAPACITY, type Solo, type SoloMeasure } from './solo';
 
 /** Géométrie partagée : SoloEditor (interactions) + impression (lecture seule). */
 export const SCORE = { measureW: 230, spacing: 12, staveY: 64, height: 190 } as const;
@@ -21,7 +21,7 @@ export const F5_INDEX = 10; // F5 dans STEPS
 export interface ScoreGeom {
   measureX: number[];
   measureW: number[];
-  noteX: Array<Array<{ id: string; x: number }>>;
+  noteX: Array<Array<{ id: string; x: number; y: number }>>;
   /** Y (SVG) de la 1re ligne (Fa5) de chaque mesure : calibre le clic → hauteur. */
   staveTopY: number[];
   /** Demi-interligne réel (un degré diatonique) : calibre le glisser. */
@@ -80,6 +80,15 @@ export function renderSystem(
     // Y de la 1re ligne + demi-interligne réel déduit des lignes extrêmes.
     geom.staveTopY.push(stave.getYForLine(0));
     geom.halfSpacing = (stave.getYForLine(4) - stave.getYForLine(0)) / 8;
+    const topY = stave.getYForLine(0);
+    const half = geom.halfSpacing;
+    // Y attendu de chaque tête de note (même formule que le clic → hauteur) :
+    // un clic près d'une tête = sélection, ailleurs = insertion à hauteur du clic.
+    const headY = (pitch: string): number => {
+      if (pitch === 'R') return topY + (F5_INDEX - 6) * half; // silence : milieu de portée (Si4)
+      const s = stepIndexOf(pitch);
+      return s < 0 ? topY + (F5_INDEX - 6) * half : topY + (F5_INDEX - s) * half;
+    };
 
     const snList: StaveNote[] = m.notes.map((n) => {
       const isRest = n.pitch === 'R';
@@ -131,7 +140,7 @@ export function renderSystem(
 
     geom.measureX.push(x);
     geom.measureW.push(w);
-    geom.noteX.push(m.notes.map((n, ni) => ({ id: n.id, x: snList[ni].getAbsoluteX() })));
+    geom.noteX.push(m.notes.map((n, ni) => ({ id: n.id, x: snList[ni].getAbsoluteX(), y: headY(n.pitch) })));
     x += w;
   });
 
