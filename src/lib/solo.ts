@@ -13,7 +13,7 @@ export const DUR_LABELS: Record<NoteDur, string> = {
   '8': 'Croche',
   '16': 'Double-croche',
 };
-export const KEY_SIGS = ['C', 'G', 'D', 'A', 'E', 'F', 'Bb', 'Eb'] as const;
+export const KEY_SIGS = ['C', 'G', 'D', 'A', 'E', 'B', 'F#', 'F', 'Bb', 'Eb', 'Ab', 'Db', 'Gb'] as const;
 export type KeySig = (typeof KEY_SIGS)[number];
 
 /** pitch "C5", "F#4", "Bb3" ou "R" pour un silence. chord : accord optionnel au-dessus.
@@ -141,9 +141,14 @@ const KEY_ACCIDENTALS: Record<string, Record<string, string>> = {
   D: { F: '#', C: '#' },
   A: { F: '#', C: '#', G: '#' },
   E: { F: '#', C: '#', G: '#', D: '#' },
+  B: { F: '#', C: '#', G: '#', D: '#', A: '#' },
+  'F#': { F: '#', C: '#', G: '#', D: '#', A: '#', E: '#' },
   F: { B: 'b' },
   Bb: { B: 'b', E: 'b' },
   Eb: { B: 'b', E: 'b', A: 'b' },
+  Ab: { B: 'b', E: 'b', A: 'b', D: 'b' },
+  Db: { B: 'b', E: 'b', A: 'b', D: 'b', G: 'b' },
+  Gb: { B: 'b', E: 'b', A: 'b', D: 'b', G: 'b', C: 'b' },
 };
 
 export function defaultAccidental(letter: string, keySig: string): string {
@@ -212,9 +217,34 @@ export function transposeSoloPitch(pitch: string, delta: number, useSharps: bool
   return midiToPitch(midi + delta, useSharps);
 }
 
+/** Tonique de chaque armature, en demi-tons (Do = 0). */
+const KEY_TONIC_PC: Record<string, number> = {
+  C: 0, G: 7, D: 2, A: 9, E: 4, B: 11, 'F#': 6,
+  F: 5, Bb: 10, Eb: 3, Ab: 8, Db: 1, Gb: 6,
+};
+
+/**
+ * Armature standard pour une tonique : on préfère toujours les tons usuels
+ * (Db plutôt que C#, Eb plutôt que D#...) ; seul Fa#/Solb suit `useSharps`.
+ */
+const PC_TO_KEY_SHARP: Record<number, string> = {
+  0: 'C', 1: 'Db', 2: 'D', 3: 'Eb', 4: 'E', 5: 'F', 6: 'F#', 7: 'G', 8: 'Ab', 9: 'A', 10: 'Bb', 11: 'B',
+};
+const PC_TO_KEY_FLAT: Record<number, string> = {
+  0: 'C', 1: 'Db', 2: 'D', 3: 'Eb', 4: 'E', 5: 'F', 6: 'Gb', 7: 'G', 8: 'Ab', 9: 'A', 10: 'Bb', 11: 'B',
+};
+
+/** Transpose une armature d'un nombre de demi-tons (ex. Sol +2 → La, Do +1 → Réb). */
+export function transposeKeySig(keySig: string, delta: number, useSharps: boolean): string {
+  const pc = KEY_TONIC_PC[keySig] ?? 0;
+  const table = useSharps ? PC_TO_KEY_SHARP : PC_TO_KEY_FLAT;
+  return table[(((pc + delta) % 12) + 12) % 12] ?? 'C';
+}
+
 export function transposeSolo(solo: Solo, delta: number, useSharps: boolean): Solo {
   return {
     ...solo,
+    keySig: transposeKeySig(solo.keySig, delta, useSharps),
     measures: solo.measures.map((m) => ({
       ...m,
       notes: m.notes.map((n) => ({
@@ -228,7 +258,11 @@ export function transposeSolo(solo: Solo, delta: number, useSharps: boolean): So
 }
 
 export function respellSolo(solo: Solo, useSharps: boolean): Solo {
-  return transposeSolo(solo, 12, useSharps);
+  const t = transposeSolo(solo, 12, useSharps);
+  // La transposition d'une octave ne change pas le ton ; seule l'enharmonie
+  // Fa#/Solb suit la préférence dièses/bémols.
+  const key = !useSharps && t.keySig === 'F#' ? 'Gb' : useSharps && t.keySig === 'Gb' ? 'F#' : t.keySig;
+  return { ...t, keySig: key };
 }
 
 // ---------- Sérialisation bloc ```solo ----------
